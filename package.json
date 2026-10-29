@@ -1,0 +1,9 @@
+{
+  "name": "hitsper",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/",
+    "dev": "npx --yes serve ."
+  }
+}
