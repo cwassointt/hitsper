@@ -34,6 +34,9 @@ const ICON = {
   skip: '<path d="M6 18l8.5-6L6 6zm9-12v12h2V6z"/>',
   plus: '<path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/>',
   minus: '<path d="M19 13H5v-2h14z"/>',
+  up: '<path d="M12 4l-7 7h4.5v9h5v-9H19z"/>',
+  down: '<path d="M12 20l7-7h-4.5V4h-5v9H5z"/>',
+  between: '<path d="M12 2l-5 5h3.5v3h3V7H17zM12 22l5-5h-3.5v-3h-3v3H7z"/>',
   trash: '<path d="M6 19c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V7H6zM19 4h-3.5l-1-1h-5l-1 1H5v2h14z"/>',
 };
 const icon = (n, cls = '') => `<svg class="icon ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[n]}</svg>`;
@@ -192,15 +195,32 @@ function cardHTML(c) {
 function timeline(tl, slot) {
   let html = slot(0);
   tl.forEach((c, i) => { html += cardHTML(c) + slot(i + 1); });
-  return `<ol class="timeline">${html}</ol>`;
+  return `<ol class="timeline">
+    <li class="edge old" aria-hidden="true">${icon('up')} Más antiguas</li>
+    ${html}
+    <li class="edge new" aria-hidden="true">${icon('down')} Más recientes</li>
+  </ol>`;
 }
 
 const mystery = (label, cls = '') => `<li class="slot mark ${cls}"><span class="q">?</span><span>${label}</span></li>`;
-const slotBtn = (i, label = 'Aquí') => `<li class="slot-li"><button class="slot" data-action="slot" data-slot="${i}" aria-label="Colocar en la posición ${i + 1}">${icon('plus')} ${label}</button></li>`;
+
+// Texto del hueco i según sus vecinos: antes / entre / después.
+function slotLabel(tl, i) {
+  const prev = tl[i - 1], next = tl[i];
+  if (!prev && !next) return { kind: 'between', text: 'Aquí' };
+  if (!prev) return { kind: 'before', text: `Más antigua que <b>${next.year}</b>` };
+  if (!next) return { kind: 'after', text: `Más reciente que <b>${prev.year}</b>` };
+  return { kind: 'between', text: `Entre <b>${prev.year}</b> y <b>${next.year}</b>` };
+}
+const SLOT_ICON = { before: 'up', after: 'down', between: 'between' };
+const slotBtn = (tl, i) => {
+  const { kind, text } = slotLabel(tl, i);
+  return `<li class="slot-li"><button class="slot ${kind}" data-action="slot" data-slot="${i}">${icon(SLOT_ICON[kind])} <span>${text}</span></button></li>`;
+};
 
 function placeView() {
   const p = G.active(game);
-  const tl = timeline(p.timeline, i => (ui.pick === i ? mystery('Tu elección', 'picked') : slotBtn(i)));
+  const tl = timeline(p.timeline, i => (ui.pick === i ? mystery(`Tu elección · ${slotLabel(p.timeline, i).text}`, 'picked') : slotBtn(p.timeline, i)));
   return `
   <section class="phase">
     <p class="eyebrow">Turno de</p>
@@ -223,7 +243,7 @@ function challengeView() {
     const c = game.challenges.find(c => c.slot === i);
     if (c) return mystery(`<b>¡HITSTER!</b> ${esc(game.players[c.player].name)}`, 'rival');
     if (who === null) return '<li class="slot-li"><span class="slot ghosted"></span></li>';
-    return ui.pick === i ? mystery(esc(game.players[who].name), 'picked') : slotBtn(i, 'Aquí');
+    return ui.pick === i ? mystery(esc(game.players[who].name), 'picked') : slotBtn(p.timeline, i);
   });
   const rivals = game.players.map((r, i) => G.canChallenge(game, i) ? `
     <button class="btn hitster ${who === i ? 'active' : ''}" data-action="challenger" data-i="${i}">

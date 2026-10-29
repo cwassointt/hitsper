@@ -167,7 +167,23 @@ button { cursor: pointer; }
   color: var(--muted); display: flex; align-items: center; justify-content: center; gap: 6px; font-weight: 700;
   transition: border-color .2s, color .2s, background .2s;
 }
-.slot:hover { border-color: var(--cyan); color: var(--cyan); background: #00e5ff10; }
+.slot:hover { filter: brightness(1.25); }
+.slot.before { --c: var(--cyan); }
+.slot.after { --c: var(--pink); }
+.slot.between { --c: var(--yellow); }
+.slot.before, .slot.after, .slot.between {
+  border-color: color-mix(in srgb, var(--c) 55%, transparent);
+  color: var(--c);
+  background: color-mix(in srgb, var(--c) 8%, transparent);
+}
+.slot b { font-weight: 900; }
+.edge {
+  display: flex; align-items: center; gap: 6px; font-size: .75rem; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .14em; padding: 2px 4px;
+}
+.edge .icon { width: 16px; height: 16px; }
+.edge.old { color: var(--cyan); }
+.edge.new { color: var(--pink); }
 .slot.ghosted { min-height: 10px; border: 0; }
 .slot.mark {
   min-height: 56px; border-style: solid; color: var(--text); justify-content: flex-start; padding: 0 14px; gap: 12px;
