@@ -391,7 +391,7 @@ function startGame() {
 const actions = {
   'add-player': () => setup.players.push({ name: '', mode: 'normal' }),
   'remove-player': ({ i }) => setup.players.splice(i, 1),
-  coop: ({ v }) => (setup.coop = v === '1'),
+  coop: ({ v }) => { setup.coop = v === '1'; },
   target: ({ v }) => (setup.target = Math.min(30, Math.max(3, setup.target + Number(v)))),
   start: () => {
     if (game && !confirm('¿Empezar una nueva partida? Se perderá la actual.')) return false;
