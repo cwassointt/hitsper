@@ -156,7 +156,7 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   display: grid; gap: 12px; box-shadow: var(--shadow);
 }
 .panel h2 { font: 600 13px/1.2 var(--font); letter-spacing: .04em; text-transform: uppercase; color: var(--text-2); }
-.segmented { display: grid; grid-template-columns: 1fr 1fr; background: var(--fill); border-radius: 12px; padding: 3px; }
+.segmented { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--fill); border-radius: 12px; padding: 3px; }
 .segmented button {
   min-height: 40px; border: 0; border-radius: 9px; background: transparent;
   font-weight: 600; font-size: 15px; color: var(--text); transition: background .2s, box-shadow .2s;
@@ -177,6 +177,7 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 }
 .roster select { padding-right: 6px; font-size: 16px; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: var(--tap); }
+.row.stack { display: grid; gap: 8px; justify-content: stretch; padding-top: 4px; }
 .row small { display: block; color: var(--text-2); font-size: 13px; }
 .toggle input {
   appearance: none; width: 51px; height: 31px; border-radius: 999px; background: var(--fill);
@@ -249,12 +250,10 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   display: grid; place-items: center; background: var(--surface-2);
 }
 .deck-vinyl { --size: 128px; }
-.deck-vinyl { animation: spin 1.8s linear infinite paused; }
-.platter.on .deck-vinyl { animation-play-state: running; }
 .tonearm {
   position: absolute; top: 8px; right: 12px; width: 5px; height: 96px; border-radius: 3px;
   background: linear-gradient(90deg, #8e8e93, #d1d1d6, #8e8e93);
-  transform-origin: 50% 6px; transform: rotate(4deg); transition: transform .6s var(--ease-in-out);
+  transform-origin: 50% 6px; transform: rotate(4deg); /* lo anima app.js */
 }
 .tonearm::before { /* pivote */
   content: ''; position: absolute; top: -4px; left: 50%; width: 16px; height: 16px; translate: -50% 0;
@@ -264,7 +263,6 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   content: ''; position: absolute; bottom: -6px; left: 50%; width: 12px; height: 16px; translate: -50% 0;
   border-radius: 3px; background: #3a3a3c;
 }
-.platter.on .tonearm { transform: rotate(26deg); }
 .deck-info { display: grid; gap: 4px; justify-items: start; min-width: 0; }
 .deck-info p { margin: 0; }
 .player-state { font-weight: 700; font-size: 20px; letter-spacing: -.02em; }
@@ -471,16 +469,70 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   .slot:hover { background: color-mix(in srgb, var(--c, var(--accent)) 14%, transparent); }
 }
 
-/* reducir movimiento = menos y más suave, no cero: se mantienen los fundidos */
-@media (prefers-reduced-motion: reduce) {
-  .entering .setup > *, .entering .phase > :not(.actions), .entering .actions.sticky, .entering .timeline > li,
-  .roster li.enter, .flash.enter, .entering .cover img, .entering .cover-blank, .entering .cover-vinyl,
-  .sheet-backdrop.enter .sheet, .sheet-backdrop.closing .sheet { animation: fade .25s ease both; }
-  .entering .slot.right, .entering .slot.wrong, .entering .chip.is-turn { animation: none; }
-  .spin-slow, .deck-vinyl, .entering .hero-vinyl, .entering .trophy, .eq i, .confetti { animation: none !important; }
-  .confetti { display: none; }
-  .tonearm, .sleeve-vinyl { transition: none; }
+/* ---------- intro de partida ----------
+   0–0.4 s el plato aparece · 0.2–0.8 s cae el disco · 0.8–1.6 s baja la aguja · 0.9 s+ entra el texto */
+.intro {
+  position: fixed; inset: 0; z-index: 40; display: grid; place-content: center; justify-items: center;
+  gap: 10px; padding: 24px; text-align: center; background: var(--bg); cursor: pointer;
+  animation: fade .2s ease both;
 }
+.intro-deck {
+  position: relative; width: 232px; height: 232px; border-radius: 28px; margin-bottom: 18px;
+  display: grid; place-items: center; background: var(--surface-2); box-shadow: var(--shadow);
+  animation: rise .45s var(--ease) both;
+}
+.intro-vinyl { --size: 200px; animation: drop-in .6s .2s var(--ease-drawer) both, spin 1.8s .8s linear infinite; }
+.intro-vinyl .vinyl-label { line-height: 1.7; }
+.intro-arm { top: 12px; right: 18px; height: 150px; width: 7px; animation: arm-in .8s .8s var(--ease-in-out) both; }
+.intro-eyebrow { margin: 0; color: var(--text-2); font-size: 15px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; animation: rise .5s .95s var(--ease) both; }
+.intro-name { font-size: clamp(34px, 10vw, 48px); font-weight: 900; letter-spacing: -.04em; animation: rise .5s 1.02s var(--ease) both; }
+.intro-meta { margin: 0; color: var(--text-2); animation: rise .5s 1.09s var(--ease) both; }
+.intro.leaving { animation: fade-out .3s ease forwards; }
+.intro.leaving .intro-deck { animation: leave .3s var(--ease) forwards; }
+@keyframes drop-in {
+  from { opacity: 0; transform: translateY(-70px) scale(1.15) rotate(-40deg); }
+  60% { opacity: 1; }
+}
+@keyframes arm-in {
+  0% { transform: rotate(-18deg); }
+  25% { transform: rotate(-12deg) scale(1.07); }
+  75% { transform: rotate(27.5deg) scale(1.07); }
+  100% { transform: rotate(26deg); }
+}
+@keyframes leave { to { transform: scale(.94); opacity: 0; } }
+
+/* ---------- diálogo de confirmación ---------- */
+.dialog-backdrop {
+  position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px;
+  background: rgba(0, 0, 0, .4); animation: fade .2s ease both;
+}
+.dialog {
+  width: min(340px, 100%); padding: 26px 20px 20px; border-radius: 24px; text-align: center;
+  display: grid; justify-items: center; gap: 8px;
+  background: var(--surface); box-shadow: 0 0 0 1px var(--separator), 0 24px 60px -20px rgba(0, 0, 0, .55);
+  animation: dialog-in .28s var(--ease) both;
+}
+.dialog-vinyl { --size: 72px; margin-bottom: 6px; animation: spin 6s linear infinite; }
+.dialog h2 { font-size: 22px; font-weight: 800; }
+.dialog p { margin: 0 0 10px; color: var(--text-2); font-size: 15px; }
+.dialog-actions { display: grid; gap: 8px; width: 100%; }
+.dialog-backdrop.closing { animation: fade-out .16s ease forwards; }
+.dialog-backdrop.closing .dialog { animation: dialog-out .16s var(--ease) forwards; }
+@keyframes dialog-in { from { opacity: 0; transform: scale(.94) translateY(8px); } }
+@keyframes dialog-out { to { opacity: 0; transform: scale(.97); } }
+
+/* reducir movimiento = menos y más suave, no cero: se mantienen los fundidos.
+   app.js pone data-motion="reduced" según el sistema o el ajuste de Opciones. */
+[data-motion="reduced"] :is(.entering .setup > *, .entering .phase > :not(.actions), .entering .actions.sticky, .entering .timeline > li,
+  .roster li.enter, .flash.enter, .entering .cover img, .entering .cover-blank, .entering .cover-vinyl,
+  .sheet-backdrop.enter .sheet, .sheet-backdrop.closing .sheet,
+  .intro-deck, .intro-eyebrow, .intro-name, .intro-meta, .dialog) { animation: fade .25s ease both; }
+[data-motion="reduced"] :is(.entering .slot.right, .entering .slot.wrong, .entering .chip.is-turn, .intro-arm) { animation: none; }
+[data-motion="reduced"] :is(.spin-slow, .entering .hero-vinyl, .entering .trophy, .eq i, .confetti, .intro-vinyl, .dialog-vinyl) { animation: none !important; }
+[data-motion="reduced"] .intro-arm { transform: rotate(26deg); }
+[data-motion="reduced"] .confetti { display: none; }
+[data-motion="reduced"] .sleeve-vinyl { transition: none; }
+[data-motion="reduced"] .intro.leaving .intro-deck, [data-motion="reduced"] .dialog-backdrop.closing .dialog { animation: fade-out .15s ease forwards; }
 @media (prefers-reduced-transparency: reduce) {
   .topbar, .actions.sticky { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
 }

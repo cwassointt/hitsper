@@ -68,6 +68,7 @@ function togglePlay() {
   if (t?.status !== 'ready') return;
   if (audio.src !== t.preview) audio.src = t.preview;
   if (audio.paused) {
+    fadeInAudio();
     audio.play().catch(() => {});
     if ('mediaSession' in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({ title: 'Canción misteriosa', artist: 'HITSTER' });
@@ -78,19 +79,101 @@ function stopAudio() { audio.pause(); audio.removeAttribute('src'); ui.playing =
 audio.addEventListener('play', () => { ui.playing = true; syncDeck(); });
 audio.addEventListener('pause', () => { ui.playing = false; syncDeck(); });
 
-// ---------- vistas ----------
-const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+// ---------- movimiento ----------
+// "system" sigue al sistema operativo; "full" y "reduced" lo fuerzan desde Opciones.
+const systemReduce = matchMedia('(prefers-reduced-motion: reduce)');
+const reduceMotion = () => setup.motion === 'reduced' || (setup.motion !== 'full' && systemReduce.matches);
+function applyMotion() { document.documentElement.dataset.motion = reduceMotion() ? 'reduced' : 'full'; }
+systemReduce.addEventListener?.('change', applyMotion);
+applyMotion();
 // el navegador solo permite vibrar tras un toque real
 const vibrate = p => { if (navigator.userActivation?.hasBeenActive) navigator.vibrate?.(p); };
+const EASE_IN_OUT = 'cubic-bezier(0.77, 0, 0.175, 1)';
 
-// Actualiza el tocadiscos sin recrearlo, para que el vinilo no salte al volver a 0°.
+// ---------- tocadiscos ----------
+// El plato se conserva entre renders (render() vuelve a colocar el mismo nodo),
+// así el giro y el brazo siguen su animación sin saltar.
+let platter = null, spinAnim = null, rampRaf = 0, deckOn = false;
+const ARM_REST = 4, ARM_PLAY = 26;
+const armAt = deg => `rotate(${deg}deg)`;
+
+// El brazo se levanta (crece un poco, como si se acercara), viaja y baja.
+function moveArm(on) {
+  const arm = platter?.querySelector('.tonearm');
+  if (!arm) return;
+  const from = getComputedStyle(arm).transform;  // incluye la animación en curso
+  arm.getAnimations().forEach(a => a.cancel());
+  const end = armAt(on ? ARM_PLAY : ARM_REST);
+  arm.style.transform = end;
+  if (reduceMotion()) {
+    arm.animate([{ transform: from }, { transform: end }], { duration: 250, easing: 'ease' });
+    return;
+  }
+  const up = 'scale(1.07)';
+  const frames = on
+    ? [{ transform: from }, { transform: `${armAt(ARM_REST + 4)} ${up}`, offset: .22 },
+       { transform: `${armAt(ARM_PLAY + 1.5)} ${up}`, offset: .74 }, { transform: end }]
+    : [{ transform: from }, { transform: `${armAt(ARM_PLAY - 2)} ${up}`, offset: .2 },
+       { transform: `${armAt(ARM_REST + 2)} ${up}`, offset: .82 }, { transform: end }];
+  arm.animate(frames, { duration: on ? 950 : 750, easing: EASE_IN_OUT });
+}
+
+// El vinilo acelera y frena como un plato real (cambia la velocidad, no salta).
+function spinRecord(on, instant = false) {
+  const rec = platter?.querySelector('.deck-vinyl');
+  if (!rec) return;
+  if (!spinAnim || spinAnim.effect?.target !== rec) {
+    spinAnim = rec.animate([{ transform: 'rotate(0deg)' }, { transform: 'rotate(360deg)' }], { duration: 1800, iterations: Infinity });
+    spinAnim.playbackRate = 0;
+  }
+  cancelAnimationFrame(rampRaf);
+  const target = on && !reduceMotion() ? 1 : 0;
+  const anim = spinAnim, start = anim.playbackRate, dur = on ? 700 : 1300, t0 = performance.now();
+  if (instant || start === target) { anim.playbackRate = target; return; }
+  const step = now => {
+    const k = Math.min(1, (now - t0) / dur);
+    const e = on ? 1 - Math.pow(1 - k, 3) : 1 - Math.pow(1 - k, 2);
+    anim.playbackRate = start + (target - start) * e;
+    if (k < 1) rampRaf = requestAnimationFrame(step);
+  };
+  rampRaf = requestAnimationFrame(step);
+}
+
+// La música entra cuando la aguja toca el disco (en iOS el volumen no se puede tocar y entra directa).
+function fadeInAudio() {
+  if (reduceMotion()) { audio.volume = 1; return; }
+  const t0 = performance.now();
+  audio.volume = 0;
+  const step = now => {
+    const k = Math.min(1, Math.max(0, (now - t0 - 550) / 450));
+    audio.volume = k;
+    if (k < 1 && !audio.paused) requestAnimationFrame(step);
+    else audio.volume = 1;
+  };
+  requestAnimationFrame(step);
+}
+
+function setDeck(on, instant = false) {
+  if (!platter) return;
+  platter.classList.toggle('on', on);
+  if (instant) {
+    platter.querySelector('.tonearm').style.transform = armAt(on ? ARM_PLAY : ARM_REST);
+    spinRecord(on, true);
+  } else if (on !== deckOn) {
+    moveArm(on);
+    spinRecord(on);
+  }
+  deckOn = on;
+}
+
+// Actualiza el texto y el botón del tocadiscos sin recrear el plato.
 function syncDeck() {
   const deck = $app.querySelector('.deck');
   if (!deck) return;
   const fresh = document.createElement('div');
   fresh.innerHTML = disc();
-  deck.querySelector('.platter').classList.toggle('on', ui.playing);
   deck.querySelector('.deck-info').replaceWith(fresh.querySelector('.deck-info'));
+  setDeck(ui.playing);
 }
 
 // Las animaciones de entrada solo se ejecutan cuando cambia la pantalla o el turno,
@@ -101,12 +184,14 @@ function render() {
   const entering = key !== lastKey;
   if (entering) { lastKey = key; phaseAt = Date.now(); }
 
-  // conserva el ángulo del vinilo entre renders para que no salte a 0°
-  const spinAt = $app.querySelector('.deck-vinyl')?.getAnimations()[0]?.currentTime;
+  const oldPlatter = platter;
   $app.innerHTML = (ui.view === 'game' && game ? gameView() : setupView()) + sheetView();
   $app.classList.toggle('entering', entering);
-  const spin = $app.querySelector('.deck-vinyl')?.getAnimations()[0];
-  if (spin && spinAt != null) spin.currentTime = spinAt;
+  // reutiliza el plato anterior para que el giro y el brazo no se reinicien
+  const fresh = $app.querySelector('.platter');
+  if (fresh && oldPlatter) { fresh.replaceWith(oldPlatter); platter = oldPlatter; setDeck(ui.playing); }
+  else if (fresh) { platter = fresh; setDeck(ui.playing, true); }
+  else { cancelAnimationFrame(rampRaf); platter = null; spinAnim = null; deckOn = false; }
   // índice para escalonar entradas (máx. 10 pasos)
   if (entering) $app.querySelectorAll('.timeline, .setup, .phase').forEach(list =>
     [...list.children].forEach((el, i) => el.style.setProperty('--i', Math.min(i, 10))));
@@ -182,6 +267,13 @@ function setupView() {
           <button class="icon-btn" data-action="target" data-v="-1" aria-label="Menos cartas">${icon('minus')}</button>
           <output>${s.target}</output>
           <button class="icon-btn" data-action="target" data-v="1" aria-label="Más cartas">${icon('plus')}</button>
+        </div>
+      </div>
+      <div class="row stack">
+        <span>Animaciones<small>${setup.motion === 'system' || !setup.motion ? 'Sigue el ajuste de tu dispositivo' : setup.motion === 'full' ? 'Todas, aunque el sistema las reduzca' : 'Solo fundidos suaves'}</small></span>
+        <div class="segmented" role="radiogroup" aria-label="Animaciones">
+          ${[['system', 'Auto'], ['full', 'Todas'], ['reduced', 'Mínimas']].map(([k, l]) =>
+            `<button role="radio" aria-checked="${(setup.motion || 'system') === k}" data-action="motion" data-v="${k}">${l}</button>`).join('')}
         </div>
       </div>
     </section>
@@ -454,11 +546,87 @@ function flashFromLast() {
 }
 
 function startGame() {
+  stopAudio();
   const players = setup.players.map((p, i) => ({ name: p.name.trim() || `Jugador ${i + 1}`, mode: p.mode }));
   game = G.createGame({ players, songs: SONGS, coop: setup.coop, useTokens: setup.useTokens, target: setup.target });
   ui = { ...ui, view: 'game', sheet: null, challenger: null, pick: null, claims: {}, flash: null, track: null };
   render();
+  scrollTo(0, 0);
   loadTrack();
+  playIntro();
+}
+
+// Intro de partida: el disco cae en el plato, baja la aguja y se anuncia el primer turno.
+// Vive fuera de #app para que los renders no la reinicien; un toque la salta.
+function playIntro() {
+  document.querySelector('.intro')?.remove();
+  const p = G.active(game), n = game.players.length;
+  const meta = game.coop ? `Cooperativo · ${game.target} cartas` : `${n} jugador${n === 1 ? '' : 'es'} · ${game.target} cartas para ganar`;
+  const el = document.createElement('div');
+  el.className = 'intro';
+  el.setAttribute('role', 'status');
+  el.innerHTML = `
+    <div class="intro-deck">
+      ${vinyl('HIT<br>STER', 'intro-vinyl')}
+      <span class="tonearm intro-arm" aria-hidden="true"></span>
+    </div>
+    <p class="intro-eyebrow">${game.coop ? 'Primera canción para el equipo' : 'Primera canción para'}</p>
+    <h2 class="intro-name">${esc(game.coop ? 'Todos juntos' : p.name)}</h2>
+    <p class="intro-meta">${meta}</p>`;
+  document.body.append(el);
+  let done = false;
+  const close = () => {
+    if (done) return;
+    done = true;
+    el.classList.add('leaving');
+    setTimeout(() => {
+      el.remove();
+      lastKey = null; // la pantalla de juego entra escalonada al quitarse la intro
+      if (ui.view === 'game') render();
+    }, reduceMotion() ? 150 : 320);
+  };
+  el.addEventListener('click', close);
+  setTimeout(close, reduceMotion() ? 1300 : 2500);
+}
+
+// Diálogo propio con el estilo del juego (sustituye a confirm()).
+function askConfirm({ title, text, ok, cancel = 'Cancelar' }) {
+  return new Promise(resolve => {
+    const back = document.activeElement;
+    const el = document.createElement('div');
+    el.className = 'dialog-backdrop';
+    el.innerHTML = `
+      <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="dlg-t" aria-describedby="dlg-d">
+        ${vinyl('?', 'dialog-vinyl')}
+        <h2 id="dlg-t">${title}</h2>
+        <p id="dlg-d">${text}</p>
+        <div class="dialog-actions">
+          <button class="btn primary" data-v="1">${ok}</button>
+          <button class="btn ghost" data-v="0">${cancel}</button>
+        </div>
+      </div>`;
+    document.body.append(el);
+    const btns = [...el.querySelectorAll('button')];
+    btns[1].focus({ focusVisible: false }); // la opción segura recibe el foco (sin anillo al tocar)
+    const finish = v => {
+      document.removeEventListener('keydown', onKey, true);
+      el.classList.add('closing');
+      setTimeout(() => { el.remove(); back?.focus?.(); resolve(v); }, reduceMotion() ? 0 : 160);
+    };
+    const onKey = e => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+      if (e.key === 'Tab') { // mantiene el foco dentro del diálogo
+        e.preventDefault();
+        btns[(btns.indexOf(document.activeElement) + 1) % btns.length].focus();
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    el.addEventListener('click', e => {
+      const b = e.target.closest('button');
+      if (b) finish(b.dataset.v === '1');
+      else if (!e.target.closest('.dialog')) finish(false);
+    });
+  });
 }
 
 const actions = {
@@ -467,10 +635,17 @@ const actions = {
   coop: ({ v }) => { setup.coop = v === '1'; },
   target: ({ v }) => (setup.target = Math.min(30, Math.max(3, setup.target + Number(v)))),
   start: () => {
-    if (game && !confirm('¿Empezar una nueva partida? Se perderá la actual.')) return false;
-    startGame();
+    if (!game) { startGame(); return false; }
+    const lead = Math.max(...game.players.map(p => p.timeline.length));
+    askConfirm({
+      title: '¿Nueva partida?',
+      text: `La partida en curso se perderá${lead ? ` (el líder lleva ${lead} carta${lead === 1 ? '' : 's'})` : ''}.`,
+      ok: 'Empezar de nuevo',
+      cancel: 'Seguir con la actual',
+    }).then(yes => yes && startGame());
     return false;
   },
+  motion: ({ v }) => { setup.motion = v; applyMotion(); },
   resume: () => { ui.view = 'game'; ui.track = null; setTimeout(loadTrack); },
   exit: () => { stopAudio(); ui.view = 'setup'; },
   home: () => { stopAudio(); game = null; ui.view = 'setup'; },
