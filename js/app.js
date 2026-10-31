@@ -75,15 +75,61 @@ function togglePlay() {
   } else audio.pause();
 }
 function stopAudio() { audio.pause(); audio.removeAttribute('src'); ui.playing = false; }
-audio.addEventListener('play', () => { ui.playing = true; render(); });
-audio.addEventListener('pause', () => { ui.playing = false; render(); });
+audio.addEventListener('play', () => { ui.playing = true; syncDeck(); });
+audio.addEventListener('pause', () => { ui.playing = false; syncDeck(); });
 
 // ---------- vistas ----------
-let lastPhase = null, phaseAt = 0;
+const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+const vibrate = p => { try { navigator.vibrate?.(p); } catch {} };
+
+// Actualiza el tocadiscos sin recrearlo, para que el vinilo no salte al volver a 0°.
+function syncDeck() {
+  const deck = $app.querySelector('.deck');
+  if (!deck) return;
+  const fresh = document.createElement('div');
+  fresh.innerHTML = disc();
+  deck.querySelector('.platter').classList.toggle('on', ui.playing);
+  deck.querySelector('.deck-info').replaceWith(fresh.querySelector('.deck-info'));
+}
+
+// Las animaciones de entrada solo se ejecutan cuando cambia la pantalla o el turno,
+// no en cada toque (cada render reemplaza el DOM).
+let lastKey = null, phaseAt = 0;
 function render() {
-  if (game?.phase !== lastPhase) { lastPhase = game?.phase; phaseAt = Date.now(); }
+  const key = ui.view === 'game' && game ? `${game.phase}:${game.turn}:${game.card?.id}` : `setup:${ui.view}`;
+  const entering = key !== lastKey;
+  if (entering) { lastKey = key; phaseAt = Date.now(); }
+
+  // conserva el ángulo del vinilo entre renders para que no salte a 0°
+  const spinAt = $app.querySelector('.deck-vinyl')?.getAnimations()[0]?.currentTime;
   $app.innerHTML = (ui.view === 'game' && game ? gameView() : setupView()) + sheetView();
+  $app.classList.toggle('entering', entering);
+  const spin = $app.querySelector('.deck-vinyl')?.getAnimations()[0];
+  if (spin && spinAt != null) spin.currentTime = spinAt;
+  // índice para escalonar entradas (máx. 10 pasos)
+  if (entering) $app.querySelectorAll('.timeline, .setup, .phase').forEach(list =>
+    [...list.children].forEach((el, i) => el.style.setProperty('--i', Math.min(i, 10))));
+
+  if (entering && game?.phase === 'reveal') onReveal();
+  if (ui.flash) ui.flash.fresh = false;
+  ui.sheetFresh = false;
+  ui.newRow = null;
   save();
+}
+
+// Revelación: el año "rueda" hasta su valor y el móvil vibra según el resultado.
+function onReveal() {
+  const p = G.active(game), y = game.card.year;
+  vibrate(G.fits(p.timeline, game.slot, y) ? 15 : [25, 40, 25]);
+  const el = $app.querySelector('.reveal-card .year');
+  if (!el || reduceMotion()) return;
+  const from = y - 25, t0 = performance.now(), dur = 700;
+  const step = now => {
+    const k = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - k, 4);
+    el.textContent = Math.round(from + (y - from) * e);
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 
 function setupView() {
@@ -91,7 +137,7 @@ function setupView() {
   const players = s.coop ? `<p class="muted">En cooperativo todos sois un único equipo: 5 fichas compartidas, cada fallo resta una. Conseguid ${s.target} cartas antes de quedaros sin fichas.</p>` : `
     <ul class="roster">
       ${s.players.map((p, i) => `
-        <li>
+        <li class="${ui.newRow === i ? 'enter' : ''}">
           <span class="avatar" style="--h:${i * 67}">${i + 1}</span>
           <input data-field="name" data-i="${i}" value="${esc(p.name)}" placeholder="Jugador ${i + 1}" aria-label="Nombre del jugador ${i + 1}" maxlength="18">
           <select data-field="mode" data-i="${i}" aria-label="Dificultad del jugador ${i + 1}">
@@ -106,8 +152,9 @@ function setupView() {
   return `
   <main class="setup">
     <header class="hero">
-      <h1 class="logo">HIT<span>STER</span></h1>
-      <p>Escucha. Adivina el año. Construye tu línea del tiempo.</p>
+      ${vinyl('HIT<br>STER', 'hero-vinyl spin-slow')}
+      <h1 class="logo">HITSTER</h1>
+      <p>Pon el disco. Adivina el año. Ordena tu colección.</p>
     </header>
     ${game ? `<button class="btn primary wide" data-action="resume">Continuar partida</button>` : ''}
     <section class="panel">
@@ -160,32 +207,42 @@ function gameView() {
   <div class="game">
     <header class="topbar">
       <button class="icon-btn" data-action="exit" aria-label="Salir al menú">${icon('exit')}</button>
-      <span class="logo small">HIT<span>STER</span></span>
+      <span class="logo small">HITSTER</span>
       <button class="icon-btn" data-action="sheet" data-v="rules" aria-label="Reglas">${icon('info')}</button>
     </header>
     ${scoreboard()}
-    ${ui.flash ? `<div class="flash ${ui.flash.kind}" role="status">${ui.flash.text}</div>` : ''}
+    ${ui.flash ? `<div class="flash ${ui.flash.kind} ${ui.flash.fresh === false ? '' : 'enter'}" role="status">${ui.flash.text}</div>` : ''}
     ${body}
   </div>`;
 }
 
+const vinyl = (label = '', cls = '') =>
+  `<span class="vinyl ${cls}" aria-hidden="true"><span class="vinyl-label">${label}</span></span>`;
+
+// Tocadiscos: el vinilo gira y el brazo baja mientras suena.
 function disc() {
-  const t = ui.track;
-  const label = !t || t.status === 'loading' ? 'Buscando canción…' : ui.playing ? 'Pausar' : 'Reproducir';
+  const t = ui.track, ready = t?.status === 'ready';
+  const state = !ready ? 'Buscando canción…' : ui.playing ? 'Sonando' : 'Lista para sonar';
   return `
-  <div class="player">
-    <button class="disc ${ui.playing ? 'spinning' : ''}" data-action="play" aria-label="${label}" ${t?.status !== 'ready' ? 'disabled' : ''}>
-      <span class="disc-label">${t?.status === 'ready' ? icon(ui.playing ? 'pause' : 'play') : '<span class="loader"></span>'}</span>
-    </button>
-    <div>
+  <div class="deck">
+    <div class="platter ${ui.playing ? 'on' : ''}">
+      ${vinyl('?', 'deck-vinyl')}
+      <span class="tonearm" aria-hidden="true"></span>
+    </div>
+    <div class="deck-info">
       <p class="eyebrow">Canción misteriosa</p>
-      <p class="player-state">${label}</p>
+      <p class="player-state" role="status">${ui.playing ? '<span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span>' : ''}${state}</p>
+      <button class="btn play" data-action="play" ${ready ? '' : 'disabled'}>
+        ${ready ? icon(ui.playing ? 'pause' : 'play') : '<span class="loader"></span>'}
+        ${ui.playing ? 'Pausar' : 'Reproducir'}
+      </button>
     </div>
   </div>`;
 }
 
 function cardHTML(c) {
   return `<li class="card" style="--h:${hue(c.year)}">
+    ${vinyl('', 'sleeve-vinyl')}
     <span class="year">${c.year}</span>
     <span class="meta"><b>${esc(c.title)}</b><span>${esc(c.artist)}</span></span>
   </li>`;
@@ -287,8 +344,11 @@ function revealView() {
   return `
   <section class="phase">
     <div class="reveal-card" style="--h:${hue(c.year)}">
-      ${ui.track?.art ? `<img src="${ui.track.art}" alt="" width="120" height="120">` : ''}
-      <div>
+      <div class="cover">
+        ${vinyl(c.year, 'cover-vinyl')}
+        ${ui.track?.art ? `<img src="${ui.track.art}" alt="Portada de ${esc(c.title)}" width="128" height="128">` : `<span class="cover-blank">${icon('play')}</span>`}
+      </div>
+      <div class="reveal-info">
         <span class="year big">${c.year}</span>
         <b>${esc(c.title)}</b>
         <span>${esc(c.artist)}</span>
@@ -302,14 +362,26 @@ function revealView() {
   </section>`;
 }
 
+// Celebración única al ganar: mini vinilos y notas que caen (solo transform/opacity).
+function confetti() {
+  const bits = Array.from({ length: 22 }, (_, i) => {
+    const x = Math.round(Math.random() * 100), d = Math.round(Math.random() * 600);
+    const r = Math.round(Math.random() * 720 - 360), s = (0.6 + Math.random() * 0.8).toFixed(2);
+    return `<i class="${i % 3 ? 'disc' : 'note'}" style="--x:${x}%;--d:${d}ms;--r:${r}deg;--s:${s}">${i % 3 ? '' : '♪'}</i>`;
+  });
+  return `<div class="confetti" aria-hidden="true">${bits.join('')}</div>`;
+}
+
 function overView() {
+  const won = !(game.coop && game.winner === null);
   const ranking = game.players.map((p, i) => ({ p, i })).sort((a, b) => b.p.timeline.length - a.p.timeline.length);
   const title = game.coop
     ? (game.winner === 0 ? '¡Lo habéis conseguido!' : 'Os quedasteis sin fichas')
     : game.winner !== null ? `¡${esc(game.players[game.winner].name)} gana!` : 'Fin de la partida';
   return `
   <section class="phase over">
-    <div class="trophy" aria-hidden="true">★</div>
+    ${won ? confetti() : ''}
+    ${vinyl(won ? '1.º' : '', `trophy spin-slow ${won ? 'gold' : ''}`)}
     <h2 class="turn-name">${title}</h2>
     <ol class="ranking">
       ${ranking.map(({ p, i }) => `<li style="--h:${i * 67}"><b>${esc(p.name)}</b><span>${p.timeline.length} carta${p.timeline.length === 1 ? '' : 's'}</span></li>`).join('')}
@@ -324,7 +396,7 @@ function overView() {
 function sheetView() {
   if (!ui.sheet) return '';
   const content = ui.sheet === 'rules' ? rulesHTML() : playersHTML();
-  return `<div class="sheet-backdrop" data-action="close-sheet">
+  return `<div class="sheet-backdrop ${ui.sheetFresh ? 'enter' : ''}" data-action="close-sheet">
     <div class="sheet" role="dialog" aria-modal="true" aria-label="${ui.sheet === 'rules' ? 'Reglas' : 'Jugadores'}" data-stop>
       <button class="icon-btn sheet-close" data-action="close-sheet" aria-label="Cerrar">${icon('close')}</button>
       ${content}
@@ -389,7 +461,7 @@ function startGame() {
 }
 
 const actions = {
-  'add-player': () => setup.players.push({ name: '', mode: 'normal' }),
+  'add-player': () => { ui.newRow = setup.players.push({ name: '', mode: 'normal' }) - 1; },
   'remove-player': ({ i }) => setup.players.splice(i, 1),
   coop: ({ v }) => { setup.coop = v === '1'; },
   target: ({ v }) => (setup.target = Math.min(30, Math.max(3, setup.target + Number(v)))),
@@ -402,8 +474,13 @@ const actions = {
   exit: () => { stopAudio(); ui.view = 'setup'; },
   home: () => { stopAudio(); game = null; ui.view = 'setup'; },
   rematch: () => { startGame(); return false; },
-  sheet: ({ v }) => (ui.sheet = v),
-  'close-sheet': () => (ui.sheet = null),
+  sheet: ({ v }) => { ui.sheet = v; ui.sheetFresh = true; },
+  'close-sheet': () => {
+    // la salida es más rápida que la entrada
+    $app.querySelector('.sheet-backdrop')?.classList.add('closing');
+    setTimeout(() => { ui.sheet = null; render(); }, reduceMotion() ? 0 : 200);
+    return false;
+  },
   play: () => { togglePlay(); return false; },
   slot: ({ slot }) => (ui.pick = Number(slot)),
   'confirm-place': () => { G.place(game, ui.pick); ui.pick = null; ui.flash = null; },
@@ -457,7 +534,7 @@ $app.addEventListener('input', e => {
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && ui.sheet) { ui.sheet = null; render(); }
+  if (e.key === 'Escape' && ui.sheet) actions['close-sheet']();
 });
 
 render();
