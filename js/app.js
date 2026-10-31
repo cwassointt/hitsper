@@ -1,4 +1,4 @@
-import { SONGS } from './songs.js';
+import { SONGS } from './songs.js?v=11';
 import * as G from './game.js';
 import { findTrack } from './audio.js';
 
