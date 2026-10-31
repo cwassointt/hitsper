@@ -5,6 +5,7 @@ import { findTrack } from './audio.js';
 const STORE = 'hitsper:v1';
 const $app = document.getElementById('app');
 const audio = new Audio();
+audio.crossOrigin = 'anonymous'; // iTunes permite CORS: así el audio pasa por Web Audio y el volumen funciona en iPhone
 
 const saved = load();
 let game = saved?.game || null;
@@ -19,7 +20,63 @@ function load() {
   try { return JSON.parse(localStorage.getItem(STORE)); } catch { return null; }
 }
 function save() {
+  markPlayed();
   try { localStorage.setItem(STORE, JSON.stringify({ game: game?.phase === 'over' ? null : game, setup })); } catch {}
+}
+
+// ---------- historial de canciones ----------
+// Cada canción que sale (en la línea, la carta en juego o descartada) se apunta para que
+// ninguna partida nueva la repita. Cuando el repertorio se agota se empieza otra vuelta,
+// excluyendo aun así las canciones de la última partida.
+const PLAYED = 'hitsper:played';
+const songKey = s => `${s.artist}|${s.title}`;
+let history = (() => {
+  try { const h = JSON.parse(localStorage.getItem(PLAYED)); return { all: new Set(h.all), last: h.last || [] }; }
+  catch { return { all: new Set(), last: [] }; }
+})();
+const gameKeys = g => [...g.players.flatMap(p => p.timeline), ...g.discard, g.card].filter(Boolean).map(songKey);
+function markPlayed() {
+  if (!game) return;
+  const keys = gameKeys(game);
+  const fresh = keys.filter(k => !history.all.has(k));
+  if (!fresh.length && keys.length === history.last.length) return;
+  fresh.forEach(k => history.all.add(k));
+  history.last = keys;
+  try { localStorage.setItem(PLAYED, JSON.stringify({ all: [...history.all], last: keys })); } catch {}
+}
+const unheard = () => SONGS.filter(s => !history.all.has(songKey(s)));
+function songPool(players, target) {
+  const need = Math.min(Math.ceil(players * target * 1.5) + 6, Math.floor(SONGS.length / 2));
+  let pool = unheard();
+  if (pool.length < need) {
+    const last = new Set(history.last);
+    history.all = new Set(last);
+    pool = SONGS.filter(s => !last.has(songKey(s)));
+  }
+  return pool;
+}
+
+// ---------- volumen ----------
+// iPhone/iPad ignoran audio.volume, así que el sonido pasa por un nodo de ganancia de Web Audio
+// (se crea en el primer toque de Reproducir, que es cuando el navegador lo permite).
+const vol = () => setup.volume ?? 1;
+let gain = null;
+function ensureGain() {
+  if (gain) { gain.context.resume?.(); return; }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = 'playback'; // suena aunque el iPhone esté en silencio
+    const ctx = new AC();
+    gain = ctx.createGain();
+    ctx.createMediaElementSource(audio).connect(gain).connect(ctx.destination);
+    audio.volume = 1;
+    ctx.resume?.();
+  } catch { gain = null; }
+}
+function setVolume(v) {
+  if (gain) gain.gain.value = v;
+  else audio.volume = v;
 }
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const hue = year => ((Math.floor(year / 10) * 10 - 1950) / 10) * 47 % 360;
@@ -37,7 +94,10 @@ const ICON = {
   up: '<path d="M12 4l-7 7h4.5v9h5v-9H19z"/>',
   down: '<path d="M12 20l7-7h-4.5V4h-5v9H5z"/>',
   between: '<path d="M12 2l-5 5h3.5v3h3V7H17zM12 22l5-5h-3.5v-3h-3v3H7z"/>',
-  trash: '<path d="M6 19c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V7H6zM19 4h-3.5l-1-1h-5l-1 1H5v2h14z"/>',
+  volLow: '<path d="M5 9v6h4l5 5V4L9 9zm11.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4z"/>',
+  volHigh: '<path d="M3 9v6h4l5 5V4L7 9zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/>',
+  mute: '<path d="M16.5 12A4.5 4.5 0 0 0 14 8v2.2l2.5 2.5zM19 12c0 .9-.2 1.8-.5 2.6l1.5 1.5A8.8 8.8 0 0 0 21 12a9 9 0 0 0-7-8.8v2.1a7 7 0 0 1 5 6.7zM4.3 3 3 4.3 7.7 9H3v6h4l5 5v-6.7l4.3 4.3c-.7.5-1.4.9-2.3 1.2v2.1a9 9 0 0 0 3.7-1.8l2 2 1.3-1.3-9-9zM12 4 9.9 6.1 12 8.2z"/>',
+  trash:'<path d="M6 19c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V7H6zM19 4h-3.5l-1-1h-5l-1 1H5v2h14z"/>',
 };
 const icon = (n, cls = '') => `<svg class="icon ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[n]}</svg>`;
 const tokens = n => `<span class="tokens" aria-label="${n} fichas">${'<i></i>'.repeat(n)}${n ? '' : '<em>0</em>'}</span>`;
@@ -68,6 +128,7 @@ function togglePlay() {
   if (t?.status !== 'ready') return;
   if (audio.src !== t.preview) audio.src = t.preview;
   if (audio.paused) {
+    ensureGain();
     fadeInAudio();
     audio.play().catch(() => {});
     if ('mediaSession' in navigator) {
@@ -82,7 +143,9 @@ audio.addEventListener('pause', () => { ui.playing = false; syncDeck(); });
 // ---------- movimiento ----------
 // "system" sigue al sistema operativo; "full" y "reduced" lo fuerzan desde Opciones.
 const systemReduce = matchMedia('(prefers-reduced-motion: reduce)');
-const reduceMotion = () => setup.motion === 'reduced' || (setup.motion !== 'full' && systemReduce.matches);
+// por defecto, todas las animaciones
+const motionPref = () => setup.motion || 'full';
+const reduceMotion = () => motionPref() === 'reduced' || (motionPref() === 'system' && systemReduce.matches);
 function applyMotion() { document.documentElement.dataset.motion = reduceMotion() ? 'reduced' : 'full'; }
 systemReduce.addEventListener?.('change', applyMotion);
 applyMotion();
@@ -141,14 +204,14 @@ function spinRecord(on, instant = false) {
 
 // La música entra cuando la aguja toca el disco (en iOS el volumen no se puede tocar y entra directa).
 function fadeInAudio() {
-  if (reduceMotion()) { audio.volume = 1; return; }
+  if (reduceMotion()) { setVolume(vol()); return; }
   const t0 = performance.now();
-  audio.volume = 0;
+  setVolume(0);
   const step = now => {
     const k = Math.min(1, Math.max(0, (now - t0 - 550) / 450));
-    audio.volume = k;
+    setVolume(k * vol());
     if (k < 1 && !audio.paused) requestAnimationFrame(step);
-    else audio.volume = 1;
+    else setVolume(vol());
   };
   requestAnimationFrame(step);
 }
@@ -270,16 +333,16 @@ function setupView() {
         </div>
       </div>
       <div class="row stack">
-        <span>Animaciones<small>${setup.motion === 'system' || !setup.motion ? 'Sigue el ajuste de tu dispositivo' : setup.motion === 'full' ? 'Todas, aunque el sistema las reduzca' : 'Solo fundidos suaves'}</small></span>
+        <span>Animaciones<small>${{ system: 'Sigue el ajuste de tu dispositivo', full: 'Todas las animaciones', reduced: 'Solo fundidos suaves' }[motionPref()]}</small></span>
         <div class="segmented" role="radiogroup" aria-label="Animaciones">
-          ${[['system', 'Auto'], ['full', 'Todas'], ['reduced', 'Mínimas']].map(([k, l]) =>
-            `<button role="radio" aria-checked="${(setup.motion || 'system') === k}" data-action="motion" data-v="${k}">${l}</button>`).join('')}
+          ${[['full', 'Todas'], ['system', 'Auto'], ['reduced', 'Mínimas']].map(([k, l]) =>
+            `<button role="radio" aria-checked="${motionPref() === k}" data-action="motion" data-v="${k}">${l}</button>`).join('')}
         </div>
       </div>
     </section>
     <button class="btn primary wide big" data-action="start">${game ? 'Nueva partida' : 'Empezar partida'}</button>
     <button class="btn ghost wide" data-action="sheet" data-v="rules">${icon('info')} Cómo se juega</button>
-    <p class="muted small center">${SONGS.length} canciones · fragmentos de 30 s vía iTunes</p>
+    <p class="muted small center">${SONGS.length} canciones · ${unheard().length} sin sonar todavía · fragmentos de 30 s vía iTunes</p>
   </main>`;
 }
 
@@ -330,7 +393,17 @@ function disc() {
         ${ui.playing ? 'Pausar' : 'Reproducir'}
       </button>
     </div>
+    ${volumeBar()}
   </div>`;
+}
+
+function volumeBar() {
+  const v = Math.round(vol() * 100);
+  return `<label class="volume" style="--v:${v}%">
+    ${icon(v === 0 ? 'mute' : 'volLow')}
+    <input type="range" min="0" max="100" step="1" value="${v}" data-field="volume" aria-label="Volumen" aria-valuetext="${v} %">
+    ${icon('volHigh')}
+  </label>`;
 }
 
 function cardHTML(c) {
@@ -548,7 +621,9 @@ function flashFromLast() {
 function startGame() {
   stopAudio();
   const players = setup.players.map((p, i) => ({ name: p.name.trim() || `Jugador ${i + 1}`, mode: p.mode }));
-  game = G.createGame({ players, songs: SONGS, coop: setup.coop, useTokens: setup.useTokens, target: setup.target });
+  markPlayed(); // apunta la partida anterior antes de sustituirla
+  const songs = songPool(setup.coop ? 1 : players.length, setup.target);
+  game = G.createGame({ players, songs, coop: setup.coop, useTokens: setup.useTokens, target: setup.target });
   ui = { ...ui, view: 'game', sheet: null, challenger: null, pick: null, claims: {}, flash: null, track: null };
   render();
   scrollTo(0, 0);
@@ -707,6 +782,16 @@ $app.addEventListener('change', e => {
 
 $app.addEventListener('input', e => {
   if (e.target.dataset.field === 'name') { setup.players[e.target.dataset.i].name = e.target.value; save(); }
+  if (e.target.dataset.field === 'volume') {
+    const v = Number(e.target.value);
+    setup.volume = v / 100;
+    setVolume(setup.volume);
+    const bar = e.target.closest('.volume');
+    bar.style.setProperty('--v', `${v}%`);
+    e.target.setAttribute('aria-valuetext', `${v} %`);
+    bar.querySelector('.icon').outerHTML = icon(v === 0 ? 'mute' : 'volLow');
+    save();
+  }
 });
 
 document.addEventListener('keydown', e => {
