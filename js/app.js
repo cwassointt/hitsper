@@ -80,7 +80,8 @@ audio.addEventListener('pause', () => { ui.playing = false; syncDeck(); });
 
 // ---------- vistas ----------
 const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
-const vibrate = p => { try { navigator.vibrate?.(p); } catch {} };
+// el navegador solo permite vibrar tras un toque real
+const vibrate = p => { if (navigator.userActivation?.hasBeenActive) navigator.vibrate?.(p); };
 
 // Actualiza el tocadiscos sin recrearlo, para que el vinilo no salte al volver a 0°.
 function syncDeck() {
