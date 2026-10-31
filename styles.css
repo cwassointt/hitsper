@@ -223,6 +223,44 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 }
 .tokens em { font-style: normal; font-size: 13px; color: var(--text-2); }
 
+/* contador de fichas: llenas = disponibles, huecos = hasta 5 */
+.meter { display: inline-flex; gap: 4px; align-items: center; flex: none; }
+.meter i {
+  width: 14px; height: 14px; border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--separator);
+}
+.meter i.on {
+  background: radial-gradient(circle, var(--bg) 0 8%, var(--accent) 10% 34%, var(--groove-b) 36% 44%, var(--groove-a) 46%);
+  box-shadow: 0 0 0 1px rgba(0,0,0,.25);
+}
+.chip .meter { grid-column: 1 / -1; gap: 3px; }
+.chip .meter i { width: 10px; height: 10px; }
+.cost {
+  display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; margin-right: 6px;
+  border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 12px; font-weight: 800;
+}
+
+/* monedero del jugador en turno */
+.wallet {
+  display: grid; gap: 10px; padding: 14px 16px; border-radius: var(--radius-lg);
+  background: var(--surface); box-shadow: var(--shadow);
+}
+.wallet-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wallet-top b { font-weight: 700; font-size: 17px; }
+.wallet-top .buy { margin-left: auto; }
+.wallet-uses { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; font-weight: 600; }
+.wallet-uses li { display: flex; align-items: center; }
+.wallet-note { margin: 0; font-size: 13px; color: var(--text-2); }
+
+/* botones de dos líneas: acción + coste */
+.btn.two { flex-direction: column; gap: 1px; line-height: 1.15; padding-block: 6px; }
+.btn.two small, .btn.hitster small { font-size: 12px; font-weight: 500; color: var(--text-2); }
+.btn-main { display: inline-flex; align-items: center; gap: 6px; }
+.btn.small.two { min-height: 48px; }
+.btn.hitster { gap: 4px; padding-block: 8px; }
+.btn.hitster:disabled { opacity: .5; }
+.btn.hitster.active .meter i:not(.on) { box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.5); }
+
 .flash { padding: 12px 16px; border-radius: 14px; font-weight: 600; font-size: 15px; }
 .flash.good { background: color-mix(in srgb, var(--good) 14%, var(--surface)); color: var(--good); }
 .flash.bad { background: color-mix(in srgb, var(--bad) 12%, var(--surface)); color: var(--bad); }

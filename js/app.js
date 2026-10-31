@@ -1,4 +1,4 @@
-import { SONGS } from './songs.js?v=11';
+import { SONGS } from './songs.js?v=12';
 import * as G from './game.js';
 import { findTrack } from './audio.js';
 
@@ -100,7 +100,12 @@ const ICON = {
   trash:'<path d="M6 19c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V7H6zM19 4h-3.5l-1-1h-5l-1 1H5v2h14z"/>',
 };
 const icon = (n, cls = '') => `<svg class="icon ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[n]}</svg>`;
-const tokens = n => `<span class="tokens" aria-label="${n} fichas">${'<i></i>'.repeat(n)}${n ? '' : '<em>0</em>'}</span>`;
+// Contador de fichas: puntos llenos = las que tienes; huecos = hasta el máximo (5).
+const fichas = n => `${n} ficha${n === 1 ? '' : 's'}`;
+const meter = n => `<span class="meter" role="img" aria-label="${fichas(n)} de ${G.MAX_TOKENS}">${
+  Array.from({ length: G.MAX_TOKENS }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</span>`;
+const tokens = meter;
+const cost = n => `<span class="cost" aria-hidden="true">${n}</span>`;
 
 // ---------- audio ----------
 async function loadTrack(tries = 0) {
@@ -448,14 +453,49 @@ function placeView() {
   <section class="phase">
     <p class="eyebrow">Turno de</p>
     <h2 class="turn-name">${esc(p.name)} <span class="badge">${G.MODES[p.mode].label}</span></h2>
+    ${wallet(p)}
     ${disc()}
     <p class="hint">Escucha la canción y toca el hueco donde crees que va. Puedes decir en voz alta el título y el artista${game.coop ? '' : ' para ganar fichas'}.</p>
     ${tl}
     <div class="actions sticky">
-      ${game.useTokens ? `<button class="btn ghost" data-action="skip" ${p.tokens < 1 ? 'disabled' : ''}>${icon('skip')} Saltar · 1</button>` : ''}
+      ${game.useTokens ? `<button class="btn ghost two" data-action="skip" ${p.tokens < 1 ? 'disabled' : ''}>
+        <span class="btn-main">${icon('skip')} Saltar canción</span>
+        <small>${p.tokens < 1 ? 'No te quedan fichas' : `Cuesta 1 ficha · tienes ${p.tokens}`}</small>
+      </button>` : ''}
       <button class="btn primary" data-action="confirm-place" ${ui.pick === null ? 'disabled' : ''}>Confirmar</button>
     </div>
   </section>`;
+}
+
+// Monedero del jugador en turno: cuántas fichas tiene, para qué sirven y cuánto cuesta cada cosa.
+function wallet(p) {
+  if (!game.useTokens) return '';
+  if (game.coop) return `
+    <div class="wallet">
+      <div class="wallet-top">${meter(p.tokens)}<b>${fichas(p.tokens)} del equipo</b></div>
+      <p class="wallet-note">Cada fallo resta una. Si llegáis a 0, se acaba la partida. Saltar canción también cuesta 1.</p>
+    </div>`;
+  const missing = G.BUY_COST - p.tokens;
+  const earn = G.MODES[p.mode].earn;
+  return `
+    <div class="wallet">
+      <div class="wallet-top">
+        ${meter(p.tokens)}
+        <b>Tienes ${fichas(p.tokens)}</b>
+        <button class="btn ghost small two buy" data-action="buy" data-i="${game.turn}" ${missing > 0 ? 'disabled' : ''}>
+          <span class="btn-main">Comprar carta</span>
+          <small>${missing > 0 ? `Te falta${missing === 1 ? '' : 'n'} ${missing}` : `Cuesta ${G.BUY_COST} fichas`}</small>
+        </button>
+      </div>
+      <ul class="wallet-uses">
+        <li>${cost(1)} Saltar canción</li>
+        <li>${cost(1)} ¡HITSTER! en el turno de otro</li>
+        <li>${cost(G.BUY_COST)} Comprar carta</li>
+      </ul>
+      <p class="wallet-note">${earn
+        ? (p.tokens < G.MAX_TOKENS ? 'Ganas 1 ficha si dices título y artista en tu turno (máximo 5).' : 'Tienes el máximo de 5 fichas.')
+        : `En modo ${G.MODES[p.mode].label} no se ganan fichas: administra las que tienes.`}</p>
+    </div>`;
 }
 
 function challengeView() {
@@ -468,10 +508,22 @@ function challengeView() {
     if (who === null) return '<li class="slot-li"><span class="slot ghosted"></span></li>';
     return ui.pick === i ? mystery(esc(game.players[who].name), 'picked') : slotBtn(p.timeline, i);
   });
-  const rivals = game.players.map((r, i) => G.canChallenge(game, i) ? `
-    <button class="btn hitster ${who === i ? 'active' : ''}" data-action="challenger" data-i="${i}">
-      ¡HITSTER! <small>${esc(r.name)} · ${r.tokens} ficha${r.tokens === 1 ? '' : 's'}</small>
-    </button>` : '').join('');
+  // Se muestran todos los rivales; si alguno no puede desafiar, el botón dice por qué.
+  const rivals = game.players.map((r, i) => {
+    if (i === game.turn) return '';
+    const used = game.challenges.some(c => c.player === i);
+    const can = G.canChallenge(game, i);
+    const note = who === i ? 'Elige el hueco correcto abajo'
+      : used ? 'Ya puso su ficha'
+      : r.tokens < 1 ? 'Sin fichas: no puede desafiar'
+      : `Cuesta 1 ficha · tiene ${r.tokens}`;
+    return `
+    <button class="btn hitster ${who === i ? 'active' : ''}" data-action="challenger" data-i="${i}" ${can || who === i ? '' : 'disabled'}>
+      <span class="btn-main">¡HITSTER! ${esc(r.name)}</span>
+      ${meter(r.tokens)}
+      <small>${note}</small>
+    </button>`;
+  }).join('');
   return `
   <section class="phase">
     ${disc()}
@@ -578,7 +630,10 @@ function playersHTML() {
         ${game.useTokens ? tokens(p.tokens) : ''}
       </header>
       <ol class="mini">${p.timeline.map(c => `<li><span style="--h:${hue(c.year)}">${c.year}</span>${esc(c.title)} — ${esc(c.artist)}</li>`).join('')}</ol>
-      ${game.useTokens ? `<button class="btn ghost small" data-action="buy" data-i="${i}" ${p.tokens < G.BUY_COST || game.phase === 'over' ? 'disabled' : ''}>Comprar carta · 3 fichas</button>` : ''}
+      ${game.useTokens && !game.coop ? `<button class="btn ghost small two" data-action="buy" data-i="${i}" ${p.tokens < G.BUY_COST || game.phase === 'over' ? 'disabled' : ''}>
+        <span class="btn-main">Comprar carta</span>
+        <small>${p.tokens < G.BUY_COST ? `Cuesta ${G.BUY_COST} · le falta${G.BUY_COST - p.tokens === 1 ? '' : 'n'} ${G.BUY_COST - p.tokens}` : `Cuesta ${G.BUY_COST} de sus ${p.tokens} fichas`}</small>
+      </button>` : ''}
     </section>`).join('')}`;
 }
 
